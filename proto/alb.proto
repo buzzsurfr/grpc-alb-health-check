@@ -3,7 +3,7 @@ syntax = "proto3";
 package AWS;
 
 option csharp_namespace = "AWS";
-option go_package = "github.com/buzzsurfr/grpc-alb-healthcheck-probe/aws";
+option go_package = "github.com/buzzsurfr/grpc-alb-health-check/aws";
 
 message HealthCheckRequest {
 }
