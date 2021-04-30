@@ -5,7 +5,9 @@ This is a simple package that wraps the [gRPC Health Check Protocol](https://git
 
 The key difference from the gRPC Health Check Protocol is this service will return an error _unless_ the specified service (or the server if no service is specified) returns a `SERVING` status.
 
-## Example
+## Examples
+
+### Add to existing Go package
 
 ```go
 package main
@@ -30,4 +32,27 @@ func main() {
 	...
 }
 
+```
+
+### Run as proxy (sidecar or separate binary)
+
+#### Usage
+
+```
+A simple proxy which listens on AWS.ALB/Healthcheck and proxies
+a request to grpc.health.v1.Health/Check.
+
+The key difference from the gRPC Health Check Protocol is
+the service will return an error unless the specified
+service (or the server if no service is specified) returns
+a SERVING status.
+
+Usage:
+  proxy [flags]
+
+Flags:
+  -a, --address string     address:port for the grpc.health.v1.Health service (default "localhost:50051")
+  -h, --help               help for proxy
+  -p, --port int           Listener port (default 50052)
+      --timeout duration   health check timeout (default 1s)
 ```
