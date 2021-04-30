@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package AWS;
+
+option csharp_namespace = "AWS";
+option go_package = "github.com/buzzsurfr/grpc-alb-healthcheck-probe/aws";
+
+message HealthCheckRequest {
+}
+
+message HealthCheckResponse {
+}
+
+service ALB {
+  // If the requested service is any status but SERVING, the call will fail
+  // with status UNAVAILABLE.
+  rpc healthcheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
