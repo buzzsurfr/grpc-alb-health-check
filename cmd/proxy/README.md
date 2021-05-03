@@ -24,5 +24,6 @@ Flags:
   -a, --address string     address:port for the grpc.health.v1.Health service (default "localhost:50051")
   -h, --help               help for proxy
   -p, --port int           Listener port (default 50052)
-      --timeout duration   health check timeout (default 1s)
+      --timeout duration   backend connection timeout (default 1s)
+  -w, --watch              use watch instead of check
 ```

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -22,11 +23,12 @@ var cfgFile string
 
 // rootCmd represents the base command when called without any subcommands
 var (
-	port    = 50052
-	address = "localhost:50051"
-	service = ""
-	timeout = time.Second
-	rootCmd = &cobra.Command{
+	port           = 50052
+	address        = "localhost:50051"
+	service        = ""
+	connectTimeout = time.Second
+	watchCmd       = false
+	rootCmd        = &cobra.Command{
 		Use:   "proxy",
 		Short: "ALB to gRPC health check proxy",
 		Long: `A simple proxy which listens on AWS.ALB/Healthcheck and proxies
@@ -38,45 +40,92 @@ service (or the server if no service is specified) returns
 a SERVING status.`,
 		// Uncomment the following line if your bare application
 		// has an action associated with it:
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Connect to backend
+			clientCtx, clientCancel := context.WithTimeout(context.Background(), connectTimeout)
+			defer clientCancel()
+
+			conn, err := grpc.DialContext(clientCtx, address, grpc.WithInsecure(), grpc.WithBlock())
+			if err != nil {
+				if err == context.DeadlineExceeded {
+					return status.Errorf(codes.Unavailable, "timeout: failed to connect to %v within %v", address, connectTimeout)
+				} else {
+					return status.Errorf(codes.Unavailable, "failed to connect to %v: %v", address, err)
+				}
+			}
+			defer conn.Close()
+
+			// Listen for frontend connections
 			lis, err := net.Listen("tcp", validatePort(port))
 			if err != nil {
 				log.Fatalf("failed to listen: %v", err)
 			}
 
 			s := grpc.NewServer()
-			albhealthcheck := &server{}
+			albhealthcheck := &server{
+				currentStatus: healthpb.HealthCheckResponse_SERVICE_UNKNOWN,
+				healthClient:  healthpb.NewHealthClient(conn),
+			}
 			albpb.RegisterALBServer(s, albhealthcheck)
+
+			if watchCmd {
+				if err := albhealthcheck.watch(context.Background()); err != nil {
+					return err
+				}
+			}
 
 			if err := s.Serve(lis); err != nil {
 				log.Fatalf("failed to serve: %v", err)
 			}
+
+			return nil
 		},
 	}
 )
 
 type server struct {
 	albpb.UnimplementedALBServer
+	currentStatus healthpb.HealthCheckResponse_ServingStatus
+	healthClient  healthpb.HealthClient
+}
+
+func (s *server) watch(ctx context.Context) error {
+	stream, err := s.healthClient.Watch(ctx, &healthpb.HealthCheckRequest{
+		Service: service,
+	})
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		for {
+			res, err := stream.Recv()
+			if err != nil {
+				s.currentStatus = healthpb.HealthCheckResponse_SERVICE_UNKNOWN
+				if err == io.EOF {
+					log.Print("stream closed by server")
+				} else {
+					log.Printf("stream error: %v", err)
+				}
+				return
+			}
+			s.currentStatus = res.GetStatus()
+		}
+	}()
+
+	return nil
 }
 
 func (s *server) Healthcheck(ctx context.Context, in *albpb.HealthCheckRequest) (*albpb.HealthCheckResponse, error) {
 	blank := &albpb.HealthCheckResponse{}
 
-	clientCtx, clientCancel := context.WithTimeout(context.Background(), timeout)
-	defer clientCancel()
-
-	conn, err := grpc.DialContext(clientCtx, address, grpc.WithInsecure(), grpc.WithBlock())
-	if err != nil {
-		if err == context.DeadlineExceeded {
-			return blank, status.Errorf(codes.Unavailable, "timeout: failed to connect to %v within %v", address, timeout)
-		} else {
-			return blank, status.Errorf(codes.Unavailable, "failed to connect to %v: %v", address, err)
-		}
+	if watchCmd {
+		return blank, parseStatus(s.currentStatus)
 	}
-	defer conn.Close()
-	client := healthpb.NewHealthClient(conn)
 
-	res, err := client.Check(ctx, &healthpb.HealthCheckRequest{})
+	res, err := s.healthClient.Check(ctx, &healthpb.HealthCheckRequest{
+		Service: service,
+	})
 
 	if err != nil {
 		return blank, err
@@ -84,7 +133,7 @@ func (s *server) Healthcheck(ctx context.Context, in *albpb.HealthCheckRequest) 
 	if res.GetStatus() != healthpb.HealthCheckResponse_SERVING {
 		return blank, status.Errorf(codes.Unavailable, "service %s not available", service)
 	}
-	return blank, nil
+	return blank, parseStatus(res.GetStatus())
 }
 
 func validatePort(port int) string {
@@ -94,21 +143,20 @@ func validatePort(port int) string {
 	return ""
 }
 
+func parseStatus(res healthpb.HealthCheckResponse_ServingStatus) error {
+	if res != healthpb.HealthCheckResponse_SERVING {
+		return status.Errorf(codes.Unavailable, "service %s is not available", service)
+	}
+	return nil
+}
+
 func init() {
 	cobra.OnInitialize(initConfig)
 
-	// Here you will define your flags and configuration settings.
-	// Cobra supports persistent flags, which, if defined here,
-	// will be global for your application.
-
-	// rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.proxy.yaml)")
-
-	// Cobra also supports local flags, which will only run
-	// when this action is called directly.
-	// rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 	rootCmd.Flags().IntVarP(&port, "port", "p", 50052, "Listener port")
 	rootCmd.Flags().StringVarP(&address, "address", "a", "localhost:50051", "address:port for the grpc.health.v1.Health service")
-	rootCmd.Flags().DurationVar(&timeout, "timeout", time.Second, "health check timeout")
+	rootCmd.Flags().DurationVar(&connectTimeout, "timeout", time.Second, "backend connection timeout")
+	rootCmd.Flags().BoolVarP(&watchCmd, "watch", "w", false, "use watch instead of check")
 }
 
 // initConfig reads in config file and ENV variables if set.
