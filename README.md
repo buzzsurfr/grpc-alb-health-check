@@ -36,6 +36,11 @@ func main() {
 
 ### Run as proxy (sidecar or separate binary)
 
+`proxy` will serve `AWS.ALB/Healthcheck` and proxy a connection to `grpc.health.v1.Health` (either `Check` or `Watch`).
+
+* `Check` will call `grpc.health.v1.Health/Check` whenever `AWS.ALB/Healthcheck` is called and proxy the status synchronously. (DEFAULT)
+* `Watch` will open a stream to `grpc.health.v1.Health/Watch` and cache any responses locally. Whenever `AWS.ALB/Healthcheck` is called, it will serve the status from the cache (asynchronously).
+
 #### Usage
 
 ```
